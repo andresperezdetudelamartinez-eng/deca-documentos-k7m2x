@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1f3a5f">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>DeCA — Control de transporte</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<style>
+  :root { --azul:#1f3a5f; --azul2:#2c5282; --gris:#5a6472; --borde:#c9d1db; --fondo:#eef2f7; }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  [hidden] { display:none !important; }
+  html,body { margin:0; padding:0; }
+  body {
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    background:var(--fondo); color:#1a202c; font-size:16px; line-height:1.45;
+    padding-bottom:env(safe-area-inset-bottom);
+  }
+  header {
+    background:var(--azul); color:#fff; padding:14px 16px calc(14px + env(safe-area-inset-top)) 16px;
+    position:sticky; top:0; z-index:10; display:flex; align-items:center; gap:10px;
+  }
+  header h1 { font-size:17px; margin:0; font-weight:700; flex:1; }
+  header .sub { font-size:11px; opacity:.75; font-weight:400; display:block; }
+  .pantalla { display:none; padding:16px; max-width:640px; margin:0 auto; }
+  .pantalla.activa { display:block; }
+
+  .grande {
+    display:block; width:100%; border:none; border-radius:14px; padding:22px 16px;
+    font-size:19px; font-weight:700; margin:12px 0; text-align:center; cursor:pointer;
+    background:var(--azul); color:#fff; box-shadow:0 2px 6px rgba(31,58,95,.25);
+  }
+  .grande.secundario { background:#fff; color:var(--azul); border:2px solid var(--azul); box-shadow:none; }
+  .grande:active { opacity:.85; }
+  .grande small { display:block; font-size:12.5px; font-weight:400; opacity:.8; margin-top:4px; }
+  button { font-family:inherit; }
+  button:disabled { opacity:.6; }
+
+  .btn-volver {
+    background:rgba(255,255,255,.15); color:#fff; border:none; border-radius:9px;
+    padding:8px 12px; font-size:14px; cursor:pointer;
+  }
+  .tarjeta {
+    background:#fff; border:1px solid var(--borde); border-radius:12px;
+    padding:14px; margin:12px 0;
+  }
+  .tarjeta h2 { font-size:14px; margin:0 0 10px; color:var(--azul); text-transform:uppercase; letter-spacing:.3px; }
+  label { display:block; font-size:12.5px; color:var(--gris); margin-bottom:10px; font-weight:600; }
+  input, select, textarea {
+    display:block; width:100%; margin-top:4px; padding:11px 10px; font-size:16px;
+    border:1.5px solid var(--borde); border-radius:9px; background:#fff; color:#1a202c;
+    font-family:inherit;
+  }
+  input:focus, select:focus, textarea:focus { outline:none; border-color:var(--azul2); }
+  textarea { resize:vertical; min-height:64px; }
+  .rejilla { display:grid; grid-template-columns:1fr 1fr; gap:0 10px; }
+  .rejilla label:last-child:nth-child(odd) { grid-column:1 / -1; }
+
+  .albaran { border:1px dashed var(--borde); border-radius:10px; padding:10px 12px 2px; margin-bottom:12px; background:#fafcff; }
+  .albaran-cab { display:flex; justify-content:space-between; align-items:center; font-size:13px; color:var(--azul); margin-bottom:8px; }
+  .mini { font-size:12px; padding:5px 9px; border-radius:7px; border:1px solid var(--borde); background:#fff; cursor:pointer; }
+  .mini.rojo { color:#a02020; border-color:#e0b4b4; }
+
+  #aviso-form { display:none; background:#fff3f3; border:1px solid #e0b4b4; color:#8a1f1f;
+    border-radius:10px; padding:10px 12px; font-size:13.5px; margin:10px 0; }
+
+  .barra { height:14px; background:#dde5ee; border-radius:8px; overflow:hidden; margin:18px 0 10px; }
+  .barra > div { height:100%; width:0%; background:var(--azul2); transition:width .3s; border-radius:8px; }
+
+  .doc { background:#fff; border:1px solid var(--borde); border-radius:12px; padding:12px; margin:10px 0; }
+  .doc-cab { display:flex; justify-content:space-between; align-items:center; gap:8px; }
+  .doc-cab .ok { color:#1c7c3c; font-size:12.5px; font-weight:600; }
+  .doc-cab .pend { color:#9a6b00; font-size:12.5px; font-weight:600; }
+  .doc-botones { display:flex; gap:8px; margin-top:10px; flex-wrap:wrap; }
+  .doc-botones button { flex:1; min-width:110px; padding:10px; border-radius:9px; border:1.5px solid var(--azul);
+    background:#fff; color:var(--azul); font-weight:600; font-size:14px; cursor:pointer; }
+  .doc-botones button.rojo { border-color:#e0b4b4; color:#a02020; }
+
+  .conjunto { display:grid; grid-template-columns:1fr 1fr 1fr auto; gap:6px; margin-bottom:8px; align-items:center; }
+  .conjunto input { margin-top:0; padding:9px 8px; font-size:14px; }
+
+  .gris { color:var(--gris); font-size:13.5px; }
+  .aviso-legal { font-size:11.5px; color:var(--gris); margin-top:22px; line-height:1.5; }
+  .resultado-caja { text-align:center; padding:10px 0; }
+  .resultado-caja .id { font-size:21px; font-weight:800; color:var(--azul); }
+  .nota { background:#fffbe8; border:1px solid #e8d9a0; border-radius:10px; padding:10px 12px;
+    font-size:13px; color:#6b5a10; margin:12px 0; }
+</style>
+</head>
+<body>
+
+<header>
+  <div style="flex:1">
+    <h1>DeCA <span class="sub">Documento electrónico de Control Administrativo</span></h1>
+  </div>
+</header>
+
+<input type="file" id="input-foto" accept="image/*" hidden>
+
+<!-- ══════════════ INICIO ══════════════ -->
+<section id="pantalla-inicio" class="pantalla activa">
+  <button id="btn-nueva" class="grande">📷 Hacer foto del albarán
+    <small>Se lee solo y se rellenan los datos</small></button>
+  <button id="btn-ver-historial" class="grande secundario">🗂 Documentos guardados</button>
+  <button id="btn-ver-ajustes" class="grande secundario">⚙️ Ajustes</button>
+  <p class="aviso-legal">Obligatorio desde el 5 de octubre de 2026 (Ley 9/2025, disposición
+    transitoria 8.ª). Se conservan 12 meses en el teléfono. El QR del PDF descarga el
+    propio documento desde internet, sin credenciales.</p>
+</section>
+
+<!-- ══════════════ CARGA / OCR ══════════════ -->
+<section id="pantalla-carga" class="pantalla">
+  <div class="tarjeta">
+    <h2>Leyendo el albarán</h2>
+    <p id="texto-estado-carga" class="gris">Preparando…</p>
+    <div class="barra"><div id="barra-progreso"></div></div>
+    <p class="gris" style="font-size:12px">La primera vez tarda un poco más (descarga el lector
+      de texto). Después funciona mucho más rápido.</p>
+  </div>
+</section>
+
+<!-- ══════════════ FORMULARIO ══════════════ -->
+<section id="pantalla-form" class="pantalla">
+  <div class="tarjeta">
+    <h2>Albarán</h2>
+    <div id="lista-albaranes"></div>
+    <button id="btn-anadir-albaran" class="mini">+ Añadir otro albarán</button>
+    <button id="btn-otra-foto" class="mini" style="margin-left:6px">📷 Otra foto</button>
+  </div>
+
+  <div class="tarjeta">
+    <h2>Transporte</h2>
+    <label>Conjunto (tractora + remolque)
+      <select id="sel-conjunto"></select>
+    </label>
+    <label>Ruta
+      <select id="sel-ruta"></select>
+    </label>
+    <div id="bloque-ruta-otra" style="display:none">
+      <label>Origen — nombre y dirección completa
+        <input id="f-origen" placeholder="Empresa — calle — CP población (provincia)">
+      </label>
+      <label>Destino — nombre y dirección completa
+        <input id="f-destino" placeholder="Empresa — calle — CP población (provincia)">
+      </label>
+    </div>
+    <div class="rejilla">
+      <label>Fecha de realización
+        <input type="date" id="f-fecha">
+      </label>
+      <label>Autorización especial (ACC)
+        <input id="f-acc" placeholder="Solo si llevas autorización">
+      </label>
+    </div>
+    <label>Observaciones
+      <textarea id="f-observaciones"></textarea>
+    </label>
+  </div>
+
+  <div id="aviso-form"></div>
+  <button id="btn-generar" class="grande">Generar DeCA</button>
+  <p class="gris" style="font-size:12px;text-align:center">El PDF sale con el QR de verificación
+    y se publica automáticamente.</p>
+</section>
+
+<!-- ══════════════ RESULTADO ══════════════ -->
+<section id="pantalla-resultado" class="pantalla">
+  <div class="tarjeta resultado-caja">
+    <div class="id" id="r-id"></div>
+    <p id="r-estado"></p>
+    <p class="gris" id="r-detalle"></p>
+  </div>
+  <button id="btn-compartir" class="grande">📤 Enviar / compartir el PDF</button>
+  <button id="btn-nueva-desde-resultado" class="grande secundario">Volver al inicio</button>
+</section>
+
+<!-- ══════════════ HISTORIAL ══════════════ -->
+<section id="pantalla-historial" class="pantalla">
+  <button class="btn-volver" style="background:var(--azul)">← Volver</button>
+  <h2 style="font-size:16px">Documentos guardados</h2>
+  <div id="lista-historial"></div>
+</section>
+
+<!-- ══════════════ AJUSTES ══════════════ -->
+<section id="pantalla-ajustes" class="pantalla">
+  <button class="btn-volver" style="background:var(--azul)">← Volver</button>
+  <h2 style="font-size:16px">Ajustes</h2>
+
+  <div class="tarjeta">
+    <h2>Publicación del QR (GitHub)</h2>
+    <label>Token de publicación
+      <input id="a-token" type="password" autocomplete="off" placeholder="github_pat_…">
+    </label>
+    <label>Repositorio
+      <input id="a-repo">
+    </label>
+    <p class="gris" style="font-size:12px">El token se guarda solo en este teléfono. Debe ser un
+      token «fine-grained» limitado a este repositorio con permiso Contents: Read and write.</p>
+  </div>
+
+  <div class="tarjeta">
+    <h2>Conductor</h2>
+    <label>Nombre y apellidos
+      <input id="a-conductor">
+    </label>
+    <label>DNI
+      <input id="a-dni">
+    </label>
+  </div>
+
+  <div class="tarjeta">
+    <h2>Cargador / Transportista</h2>
+    <label>Nombre o denominación social
+      <input id="a-cargador">
+    </label>
+    <label>NIF
+      <input id="a-cargador-nif">
+    </label>
+    <label>Domicilio
+      <input id="a-cargador-dir">
+    </label>
+    <label>Carácter del transporte
+      <textarea id="a-caracter"></textarea>
+    </label>
+    <label>Observaciones por defecto
+      <textarea id="a-observaciones"></textarea>
+    </label>
+  </div>
+
+  <div class="tarjeta">
+    <h2>Conjuntos de vehículos</h2>
+    <div id="lista-conjuntos"></div>
+    <button id="btn-anadir-conjunto" class="mini">+ Añadir conjunto</button>
+  </div>
+
+  <button id="btn-guardar-ajustes" class="grande">Guardar ajustes</button>
+
+  <div class="tarjeta">
+    <h2>Archivo</h2>
+    <button id="btn-exportar" class="mini">Exportar archivo (JSON)</button>
+    <button id="btn-poda" class="mini" style="margin-left:6px">Depurar ahora (12 meses)</button>
+  </div>
+
+  <p class="aviso-legal">DeCA — Orden FOM/2861/2012, art. 6 · Resolución de 5 de junio de 2026.
+    Los datos no se inventan nunca: lo que no traiga el albarán se teclea o se corrige a mano
+    antes de generar.</p>
+</section>
+
+<script src="vendor/jspdf.umd.min.js"></script>
+<script src="vendor/qrcode.js"></script>
+<script src="vendor/tesseract.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
