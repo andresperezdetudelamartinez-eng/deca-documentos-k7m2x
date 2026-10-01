@@ -498,21 +498,60 @@ async function publicarPDF(ajustes, rutaArchivo, bytes) {
   return r.json();
 }
 
-/** Comprueba que la URL sirve el PDF emitido (sha256). Reintenta por la caché de Pages. */
-async function verificarURL(url, shaEsperado, intentos = 6, esperaMs = 6000) {
-  for (let i = 0; i < intentos; i++) {
-    try {
-      const r = await fetch(url + '?v=' + Date.now(), { cache: 'no-store' });
-      const ctype = r.headers.get('Content-Type') || '';
-      if (r.ok && ctype.toLowerCase().includes('pdf')) {
-        const buf = new Uint8Array(await r.arrayBuffer());
-        if (!shaEsperado || await sha256hex(buf) === shaEsperado) return true;
-      }
-    } catch (e) { /* siguiente intento */ }
-    if (i < intentos - 1) await new Promise(r => setTimeout(r, esperaMs));
+/** Comprueba la URL pública EXACTAMENTE como la vería el guardia:
+    sin sesión (credentials omit), sin caché del móvil y siguiendo redirecciones.
+    Devuelve { ok, motivo, http }. motivos: ok · sin_publicar · no_pdf · otro_pdf ·
+    vacio · sin_red · http_<código> */
+async function comprobarURL(url, shaEsperado) {
+  try {
+    const r = await fetch(url + '?v=' + Date.now(),
+      { cache: 'no-store', credentials: 'omit', redirect: 'follow' });
+    if (r.status === 404) return { ok: false, motivo: 'sin_publicar', http: 404 };
+    if (!r.ok) return { ok: false, motivo: 'http_' + r.status, http: r.status };
+    const ctype = (r.headers.get('Content-Type') || '').toLowerCase();
+    if (!ctype.includes('pdf')) return { ok: false, motivo: 'no_pdf', http: r.status };
+    const buf = new Uint8Array(await r.arrayBuffer());
+    if (!buf.length) return { ok: false, motivo: 'vacio', http: r.status };
+    if (shaEsperado && await sha256hex(buf) !== shaEsperado) {
+      return { ok: false, motivo: 'otro_pdf', http: r.status };
+    }
+    return { ok: true, motivo: 'ok', http: r.status };
+  } catch (e) {
+    return { ok: false, motivo: 'sin_red', http: 0 };
   }
-  return false;
 }
+
+/** Igual que comprobarURL pero insistiendo, por si GitHub Pages aún no lo sirve. */
+async function comprobarConEspera(url, shaEsperado, esperasMs = [5000, 8000, 12000, 15000], onIntento) {
+  let ultimo = { ok: false, motivo: 'sin_red', http: 0 };
+  for (let i = 0; i <= esperasMs.length; i++) {
+    if (onIntento) onIntento(i + 1, esperasMs.length + 1);
+    ultimo = await comprobarURL(url, shaEsperado);
+    if (ultimo.ok) return ultimo;
+    // Si el fichero no existe (404), subir otra vez no sirve: insistir tampoco.
+    if (ultimo.motivo === 'sin_publicar') return ultimo;
+    if (i < esperasMs.length) await new Promise(r => setTimeout(r, esperasMs[i]));
+  }
+  return ultimo;
+}
+
+/** ¿GitHub está caído ahora mismo? (para distinguir "mi PDF" de "internet"). */
+async function githubCaido() {
+  try {
+    const r = await fetch('https://www.githubstatus.com/api/v2/status.json', { cache: 'no-store' });
+    if (!r.ok) return false;
+    const j = await r.json();
+    return j && j.status && j.status.indicator && j.status.indicator !== 'none';
+  } catch (e) { return false; }
+}
+
+const MOTIVOS = {
+  sin_publicar: 'el PDF todavía no está en internet',
+  no_pdf: 'internet devuelve otra cosa en vez del PDF',
+  otro_pdf: 'internet sirve un PDF distinto al generado',
+  vacio: 'el archivo de internet está vacío',
+  sin_red: 'este teléfono no tiene conexión ahora mismo'
+};
 
 /* ═══════════════════════════════════════════ archivo local (IndexedDB) ═══ */
 
@@ -757,28 +796,40 @@ async function generarYPublicar() {
 
     const registro = {
       id: docId, creado: new Date().toISOString(), datos: datosComp,
-      bytes: bytes.buffer.slice(0), url, sha256: sha, estado: 'pendiente'
+      bytes: bytes.buffer.slice(0), url, sha256: sha, estado: 'pendiente',
+      subido: false, ultimaVerif: null, publicadoEn: null
     };
 
     btn.textContent = 'Publicando el QR…';
-    let publicado = false, errorPub = '';
+    let publicado = false, motivo = '';
     if (estado.ajustes.token) {
       try {
         await publicarPDF(estado.ajustes, sl + '.pdf', bytes);
-        publicado = await verificarURL(url, sha);
-        if (!publicado) errorPub = 'Subido, pero GitHub aún no lo sirve (tarda ~1 min). Reintenta la verificación.';
-      } catch (e) { errorPub = e.message; }
+        registro.subido = true;
+        btn.textContent = 'Comprobando que el QR ya funciona…';
+        const res = await comprobarConEspera(url, sha, undefined, (i, n) => {
+          btn.textContent = `Comprobando el QR… (${i}/${n})`;
+        });
+        publicado = res.ok;
+        motivo = res.motivo;
+      } catch (e) {
+        motivo = 'subida: ' + e.message;
+      }
     } else {
-      errorPub = 'Falta el token de GitHub en Ajustes: el PDF lleva el QR, pero hay que publicarlo.';
+      motivo = 'sin_token';
     }
     registro.estado = publicado ? 'publicado' : 'pendiente';
-    registro.error = errorPub;
+    registro.ultimaVerif = new Date().toISOString();
+    if (publicado) registro.publicadoEn = registro.ultimaVerif;
+    registro.error = publicado ? '' : motivo;
     await guardarDoc(registro);
     estado.ultimoDoc = registro;
+    programarVigilante();
 
     $('#r-id').textContent = docId;
-    $('#r-estado').textContent = publicado ? '✅ Publicado — el QR ya funciona'
-      : '⏳ Pendiente de publicar — ' + errorPub;
+    $('#r-estado').textContent = publicado
+      ? '✅ Publicado y comprobado — el QR ya funciona'
+      : '⏳ ' + textoPendiente(registro);
     $('#r-detalle').textContent = datosComp.mercancia.peso
       ? `${datosComp.mercancia.peso} ${datosComp.mercancia.unidad} · ${(datosComp.albaranes || []).map(a => a.entrega).filter(Boolean).join(', ')}`
       : '';
@@ -807,21 +858,120 @@ async function compartirDoc(registro) {
   setTimeout(() => URL.revokeObjectURL(a.href), 30000);
 }
 
-async function publicarPendiente(registro) {
-  const ajustes = estado.ajustes;
-  if (!ajustes.token) { alert('Falta el token de GitHub en Ajustes.'); return; }
-  const sl = registro.url.split('/').pop().replace(/\.pdf$/, '');
-  try {
-    await publicarPDF(ajustes, sl + '.pdf', new Uint8Array(registro.bytes));
-    const ok = await verificarURL(registro.url, registro.sha256);
-    registro.estado = ok ? 'publicado' : 'pendiente';
-    registro.error = ok ? '' : 'Subido; GitHub tarda ~1 min en servirlo.';
-    await guardarDoc(registro);
-    await pintarHistorial();
-    alert(ok ? 'Publicado y verificado. El QR ya funciona.' : 'Subido. Espera un minuto y reintenta la verificación.');
-  } catch (e) {
-    alert('No se pudo publicar: ' + e.message);
+/* ═════════════════════ verificación continua (segundo plano) ══════════════════
+   Todo documento que no esté comprobado se revisa solo: al abrir la app, al
+   volver a ella y cada pocos segundos mientras haya alguno pendiente. Cuando
+   queda publicado se sella con la hora y (si hay permiso) salta un aviso. */
+
+function textoPendiente(registro) {
+  if (!registro.subido) {
+    if (registro.error === 'sin_token') {
+      return 'Sin publicar — falta el token de GitHub en Ajustes. El PDF lleva el QR, pero hay que publicarlo.';
+    }
+    return 'No se pudo subir: ' + (registro.error || 'error desconocido');
   }
+  if (registro.error === 'sin_red') return 'Subido. Sin conexión para comprobar; se comprobará solo.';
+  return 'Subido. GitHub aún no lo sirve; comprobación automática en marcha.';
+}
+
+/** Marca un registro como publicado (sella hora y avisa). */
+async function marcarPublicado(registro) {
+  const primeraVez = registro.estado !== 'publicado';
+  registro.estado = 'publicado';
+  registro.error = '';
+  registro.publicadoEn = registro.publicadoEn || new Date().toISOString();
+  registro.ultimaVerif = new Date().toISOString();
+  await guardarDoc(registro);
+  if (primeraVez) {
+    avisarPublicado(registro);
+    if (estado.ultimoDoc && estado.ultimoDoc.id === registro.id) {
+      estado.ultimoDoc = registro;
+      const el = $('#r-estado');
+      if (el && $('#pantalla-resultado').classList.contains('activa')) {
+        el.textContent = '✅ Publicado y comprobado — el QR ya funciona';
+      }
+    }
+  }
+}
+
+/** Aviso local cuando un documento pasa a publicado (si hay permiso). */
+function avisarPublicado(registro) {
+  try {
+    if ('Notification' in window && Notification.permission === 'granted') {
+      new Notification('DeCA publicado ✅', {
+        body: registro.id + ' — el QR ya funciona. Comprobado a las ' +
+              new Date().toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' }) + '.',
+        tag: 'deca-' + registro.id
+      });
+    }
+  } catch (e) { /* sin aviso, sin problema */ }
+}
+
+/** Resuelve un documento: sube lo que falte y comprueba hasta que esté listo.
+    silencioso = true → sin avisos emergentes (rondas de fondo). */
+async function resolverDoc(registro, conEspera = true, silencioso = false) {
+  const ajustes = estado.ajustes;
+  // 1) Si la subida nunca llegó a hacerse, se hace ahora.
+  if (!registro.subido) {
+    if (!ajustes.token) {
+      registro.error = 'sin_token';
+      registro.ultimaVerif = new Date().toISOString();
+      await guardarDoc(registro);
+      if (!silencioso) alert('Falta el token de GitHub en Ajustes.');
+      return false;
+    }
+    const sl = registro.url.split('/').pop().replace(/\.pdf$/, '');
+    try {
+      await publicarPDF(ajustes, sl + '.pdf', new Uint8Array(registro.bytes));
+      registro.subido = true;
+      registro.error = '';
+    } catch (e) {
+      registro.error = 'subida: ' + e.message;
+      registro.ultimaVerif = new Date().toISOString();
+      await guardarDoc(registro);
+      return false;
+    }
+  }
+  // 2) Comprobación en internet (con paciencia si es a petición del usuario).
+  const res = conEspera
+    ? await comprobarConEspera(registro.url, registro.sha256)
+    : await comprobarURL(registro.url, registro.sha256);
+  if (res.ok) { await marcarPublicado(registro); return true; }
+  registro.estado = 'pendiente';
+  registro.error = res.motivo;
+  registro.ultimaVerif = new Date().toISOString();
+  await guardarDoc(registro);
+  return false;
+}
+
+/** Revisa todos los pendientes (rápido, una sola pasada, sin avisos emergentes).
+    Devuelve cuántos quedan por resolver "de verdad" (los que no dependen del token). */
+async function comprobarPendientes() {
+  const docs = await listarDocs();
+  const pendientes = docs.filter(d => d.estado !== 'publicado');
+  for (const d of pendientes) {
+    // Sin token y sin subir: no hay nada que reintentar; que no consuma la ronda.
+    if (!d.subido && !estado.ajustes.token) continue;
+    await resolverDoc(d, false, true);
+  }
+  return (await listarDocs()).filter(
+    d => d.estado !== 'publicado' && (d.subido || estado.ajustes.token)).length;
+}
+
+let vigilanteTimer = null, vigilanteEspera = 20000;
+function programarVigilante() {
+  clearTimeout(vigilanteTimer);
+  vigilanteTimer = setTimeout(async () => {
+    let quedan = 0;
+    try { quedan = await comprobarPendientes(); } catch (e) { /* sin red: se reintenta */ }
+    if (quedan > 0) {
+      vigilanteEspera = Math.min(vigilanteEspera * 1.7, 300000); // hasta 5 min
+      programarVigilante();
+    } else {
+      vigilanteEspera = 20000;
+      if ($('#pantalla-historial').classList.contains('activa')) pintarHistorial();
+    }
+  }, vigilanteEspera);
 }
 
 /* ═══════════════════════════════════════════ UI: historial y ajustes ═══ */
@@ -840,15 +990,23 @@ async function pintarHistorial() {
     const fecha = new Date(d.creado).toLocaleString('es-ES',
       { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
     const entregas = ((d.datos && d.datos.albaranes) || []).map(a => a.entrega).filter(Boolean).join(', ');
+    const hora = (iso) => iso ? new Date(iso).toLocaleTimeString('es-ES',
+      { hour: '2-digit', minute: '2-digit' }) : '';
+    const sello = d.estado === 'publicado'
+      ? `<span class="ok">✅ publicado</span><span class="gris"> · QR comprobado${d.publicadoEn ? ' a las ' + hora(d.publicadoEn) : ''}</span>`
+      : (d.subido
+        ? `<span class="pend">⏳ subido, comprobando…</span><span class="gris">${d.ultimaVerif ? ' · última comprobación ' + hora(d.ultimaVerif) : ''}</span>`
+        : `<span class="pend">⚠️ sin publicar</span>`);
     div.innerHTML = `
       <div class="doc-cab">
         <strong>${esc(d.id)}</strong>
-        <span class="${d.estado === 'publicado' ? 'ok' : 'pend'}">${d.estado === 'publicado' ? '✅ publicado' : '⏳ pendiente'}</span>
       </div>
       <div class="gris">${esc(fecha)}${entregas ? ' · entrega ' + esc(entregas) : ''}</div>
+      <div class="gris" style="margin-top:4px">${sello}</div>
       <div class="doc-botones">
         <button data-ver="${d.id}">Ver / compartir</button>
-        ${d.estado !== 'publicado' ? `<button data-pub="${d.id}">Publicar QR</button>` : ''}
+        <button data-comp="${d.id}">${d.estado === 'publicado' ? 'Re-comprobar' : (d.subido ? 'Comprobar ahora' : 'Publicar y comprobar')}</button>
+        <button data-probar="${d.id}">🔍 Probar</button>
         <button class="rojo" data-borrar="${d.id}">Borrar</button>
       </div>`;
     cont.appendChild(div);
@@ -857,12 +1015,25 @@ async function pintarHistorial() {
     const d = (await listarDocs()).find(x => x.id === b.dataset.ver);
     if (d) compartirDoc(d);
   }));
-  cont.querySelectorAll('button[data-pub]').forEach(b => b.addEventListener('click', async () => {
-    const d = (await listarDocs()).find(x => x.id === b.dataset.pub);
-    if (d) publicarPendiente(d);
+  cont.querySelectorAll('button[data-comp]').forEach(b => b.addEventListener('click', async () => {
+    const d = (await listarDocs()).find(x => x.id === b.dataset.comp);
+    if (!d) return;
+    b.disabled = true; b.textContent = 'Comprobando…';
+    const ok = await resolverDoc(d, true);
+    await pintarHistorial();
+    if (!ok) {
+      const caido = await githubCaido();
+      alert(caido
+        ? 'GitHub está caído ahora mismo. Tu documento está subido; se comprobará solo.'
+        : 'Todavía no: ' + (MOTIVOS[d.error] || d.error || 'no está disponible') + '. Se seguirá comprobando solo.');
+    }
+  }));
+  cont.querySelectorAll('button[data-probar]').forEach(b => b.addEventListener('click', async () => {
+    const d = (await listarDocs()).find(x => x.id === b.dataset.probar);
+    if (d && d.url) window.open(d.url, '_blank');
   }));
   cont.querySelectorAll('button[data-borrar]').forEach(b => b.addEventListener('click', async () => {
-    if (confirm('¿Borrar ' + b.dataset.borrar + ' del archivo del teléfono?')) {
+    if (confirm('¿Borrar ' + b.dataset.borrar + ' del archivo del teléfono? (El PDF de internet no se toca)')) {
       await borrarDoc(b.dataset.borrar);
       pintarHistorial();
     }
@@ -925,6 +1096,7 @@ function exportarArchivo() {
   listarDocs().then(docs => {
     const out = docs.map(d => ({
       id: d.id, creado: d.creado, estado: d.estado, url: d.url, sha256: d.sha256,
+      subido: !!d.subido, publicadoEn: d.publicadoEn || null, ultimaVerif: d.ultimaVerif || null,
       datos: d.datos
     }));
     const blob = new Blob([JSON.stringify(out, null, 2)], { type: 'application/json' });
@@ -988,6 +1160,46 @@ function init() {
   });
 
   podar().catch(() => {});
+
+  // Al abrir la app y cada vez que vuelve a primer plano: revisar lo pendiente.
+  programarVigilante();
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) {
+      vigilanteEspera = 20000;
+      comprobarPendientes().catch(() => {});
+      if ($('#pantalla-historial').classList.contains('activa')) pintarHistorial();
+    }
+  });
+
+  // Probar el QR tal y como lo verá el guardia: abre la URL pública del PDF.
+  $('#btn-probar-qr').addEventListener('click', () => {
+    const d = estado.ultimoDoc;
+    if (d && d.url) window.open(d.url, '_blank');
+  });
+
+  // Avisos del teléfono cuando un documento pasa a publicado (opcional).
+  const btnAviso = $('#btn-avisos');
+  const pintarBotonAviso = () => {
+    if (!('Notification' in window)) { btnAviso.style.display = 'none'; return; }
+    const p = Notification.permission;
+    btnAviso.textContent = p === 'granted' ? '🔔 Avisos activados (toca para desactivar)'
+      : p === 'denied' ? '🔕 Avisos bloqueados en el navegador'
+      : '🔔 Avisarme cuando se publique un documento';
+    btnAviso.disabled = p === 'denied';
+  };
+  if ('Notification' in window) {
+    pintarBotonAviso();
+    btnAviso.addEventListener('click', async () => {
+      if (Notification.permission === 'granted') {
+        alert('Para desactivarlos: candado del navegador → Permisos → Notificaciones.');
+        return;
+      }
+      await Notification.requestPermission();
+      pintarBotonAviso();
+    });
+  } else {
+    btnAviso.style.display = 'none';
+  }
 
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('sw.js').catch(() => {});

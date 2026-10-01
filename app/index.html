@@ -176,6 +176,9 @@
     <p class="gris" id="r-detalle"></p>
   </div>
   <button id="btn-compartir" class="grande">📤 Enviar / compartir el PDF</button>
+  <button id="btn-probar-qr" class="grande secundario">🔍 Probar el QR (como lo verá el guardia)</button>
+  <p class="gris" style="font-size:12px;text-align:center;margin-top:-4px">Abre el enlace del QR en el
+    navegador, sin sesión ni atajos. Si se ve el PDF aquí, el guardia también lo verá.</p>
   <button id="btn-nueva-desde-resultado" class="grande secundario">Volver al inicio</button>
 </section>
 
@@ -236,6 +239,15 @@
     <h2>Conjuntos de vehículos</h2>
     <div id="lista-conjuntos"></div>
     <button id="btn-anadir-conjunto" class="mini">+ Añadir conjunto</button>
+  </div>
+
+  <div class="tarjeta">
+    <h2>Comprobación del QR</h2>
+    <p class="gris" style="font-size:12.5px;margin-top:0">Cada documento se comprueba solo contra
+      internet: primero al publicarlo y después en segundo plano, hasta confirmar que el enlace
+      del QR sirve el PDF correcto. El estado y la hora de la comprobación salen en «Documentos
+      guardados».</p>
+    <button id="btn-avisos" class="mini">🔔 Avisarme cuando se publique un documento</button>
   </div>
 
   <button id="btn-guardar-ajustes" class="grande">Guardar ajustes</button>

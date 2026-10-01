@@ -6,7 +6,7 @@
    los datos que vienen de internet. */
 'use strict';
 
-const CACHE = 'deca-v2';
+const CACHE = 'deca-v3';
 const SHELL = [
   './',
   'index.html',
@@ -39,6 +39,10 @@ self.addEventListener('fetch', (e) => {
   if (e.request.method !== 'GET') return;
   // Solo se atiende lo propio; GitHub (API y PDFs) y el CDN del OCR van a la red.
   if (url.origin !== location.origin) return;
+
+  // Los PDFs del QR NUNCA se tocan: la comprobación debe ver internet tal cual.
+  // (Si se cachearan, una copia vieja podría tapar que el PDF aún no está publicado.)
+  if (url.pathname.toLowerCase().endsWith('.pdf')) return;
 
   // Librerías de vendor/: no cambian nunca → primero la copia guardada.
   if (url.pathname.includes('/vendor/')) {
